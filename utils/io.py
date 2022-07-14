@@ -10,7 +10,13 @@ import numpy as np
 from PIL import Image
 from torchvision import transforms
 from torchvision.utils import save_image
+from ast import literal_eval
 
+custom_color_dict = {}
+with open("ade20k_labels.txt", "r") as f:
+    for idx, line in enumerate(f.readlines()):
+        d = literal_eval(line.split('\t')[0])
+        custom_color_dict[d] = idx + 1
 
 class Timer:
     def __init__(self, msg='Elapsed time: {}', verbose=True):
@@ -39,18 +45,23 @@ def open_image(image_path, image_size=None):
     return transform(image).unsqueeze(0)
 
 
-def change_seg(seg):
-    color_dict = {
-        (0, 0, 255): 3,  # blue
-        (0, 255, 0): 2,  # green
-        (0, 0, 0): 0,  # black
-        (255, 255, 255): 1,  # white
-        (255, 0, 0): 4,  # red
-        (255, 255, 0): 5,  # yellow
-        (128, 128, 128): 6,  # grey
-        (0, 255, 255): 7,  # lightblue
-        (255, 0, 255): 8  # purple
-    }
+
+def change_seg(seg, num_colors):
+    if num_colors == 8:
+        color_dict = {
+            (0, 0, 255): 3,  # blue 
+            (0, 255, 0): 2,  # green
+            (0, 0, 0): 0,  # black
+            (255, 255, 255): 1,  # white
+            (255, 0, 0): 4,  # red
+            (255, 255, 0): 5,  # yellow
+            (128, 128, 128): 6,  # grey
+            (0, 255, 255): 7,  # lightblue
+            (255, 0, 255): 8  # purple
+        }
+    else:
+        color_dict = custom_color_dict
+    print(color_dict)
     arr_seg = np.asarray(seg)
     new_seg = np.zeros(arr_seg.shape[:-1])
     for x in range(arr_seg.shape[0]):
@@ -85,14 +96,17 @@ def load_segment(image_path, image_size=None):
     transform = transforms.CenterCrop((h // 16 * 16, w // 16 * 16))
     image = transform(image)
     if len(np.asarray(image).shape) == 3:
-        image = change_seg(image)
+        image = change_seg(image, 150)
     return np.asarray(image)
 
 
 def compute_label_info(content_segment, style_segment):
+    if content_segment is None and style_segment is None:
+        return None, None
     if not content_segment.size or not style_segment.size:
         return None, None
     max_label = np.max(content_segment) + 1
+    print("max_label : ", max_label)
     label_set = np.unique(content_segment)
     label_indicator = np.zeros(max_label)
     for l in label_set:
@@ -105,6 +119,7 @@ def compute_label_info(content_segment, style_segment):
             label_indicator[l] = True
         else:
             label_indicator[l] = False
+    print(label_indicator)
     return label_set, label_indicator
 
 

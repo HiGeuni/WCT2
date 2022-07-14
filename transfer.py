@@ -23,6 +23,7 @@ THE SOFTWARE.
 import os
 import tqdm
 import argparse
+import numpy as np
 
 import torch
 from torchvision.utils import save_image
@@ -31,17 +32,17 @@ from model import WaveEncoder, WaveDecoder
 
 from utils.core import feature_wct
 from utils.io import Timer, open_image, load_segment, compute_label_info
-
+from utils.remapping import SegReMapping
 
 IMG_EXTENSIONS = [
     '.jpg', '.JPG', '.jpeg', '.JPEG',
     '.png', '.PNG',
 ]
 
+segremapping = SegReMapping('pat_rel.npy')
 
 def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
-
 
 class WCT2:
     def __init__(self, model_path='./model_checkpoints', transfer_at=['encoder', 'skip', 'decoder'], option_unpool='cat5', device='cuda:0', verbose=False):
@@ -131,6 +132,52 @@ def get_all_transfer():
     return ret
 
 
+def custom_bulk(config):
+    device = torch.device('cpu' if config.cpu or not torch.cuda.is_available() else 'cuda:0')
+
+    content_list = os.listdir(config.content)
+    style_list = os.listdir(config.style)
+
+    for i in range(len(content_list)):
+        content_name = content_list[i]
+        content_seg_name = content_name[:-4] +"_seg"+content_name[-4:]
+        for j in range(len(style_list)):
+            style_name = style_list[j]
+            style_seg_name = style_name[:-4]+"_seg"+style_name[-4:]
+            _content = os.path.join(config.content, content_name)
+            _style = os.path.join(config.style, style_name)
+            # todo
+            _content_segment = os.path.join(config.content_segment, content_seg_name) if config.content_segment else None
+            _style_segment = os.path.join(config.style_segment, style_seg_name) if config.style_segment else None
+            _output = os.path.join(config.output, content_name[:-4] + style_name)
+            content = open_image(_content, config.image_size).to(device)
+            style = open_image(_style, config.image_size).to(device)
+            content_segment = load_segment(_content_segment, config.image_size)
+            style_segment = load_segment(_style_segment, config.image_size)
+            
+            print("content_seg : ", np.unique(content_segment))
+            print("style_seg : ", np.unique(style_segment))
+            # for segmentation remapping
+            content_segment = segremapping.self_remapping(content_segment) if config.content_segment else None
+            style_segment = segremapping.self_remapping(style_segment) if config.style_segment else None
+            if content_segment is not None and style_segment is not None:
+                content_segment, style_segment = segremapping.cross_remapping(content_segment, style_segment)
+                print("content_seg : ", np.unique(content_segment))
+                print("style_seg : ", np.unique(style_segment))
+            _, ext = os.path.splitext(content_list[i])
+
+            for _transfer_at in get_all_transfer():
+                with Timer('Elapsed time in whole WCT: {}', config.verbose):
+                    postfix = '_'.join(sorted(list(_transfer_at)))
+                    fname_output = _output.replace(ext, '_{}_{}.{}'.format(config.option_unpool, postfix, ext))
+                    print(fname_output)
+                    print('------ transfer:', content_list[i], style_list[j])
+                    wct2 = WCT2(transfer_at=_transfer_at, option_unpool=config.option_unpool, device=device, verbose=config.verbose)
+                    with torch.no_grad():
+                        img = wct2.transfer(content, style, content_segment, style_segment, alpha=config.alpha)
+                    save_image(img.clamp_(0, 1), fname_output, padding=0)
+
+            
 def run_bulk(config):
     device = 'cpu' if config.cpu or not torch.cuda.is_available() else 'cuda:0'
     device = torch.device(device)
@@ -213,4 +260,4 @@ if __name__ == '__main__':
     '''
     CUDA_VISIBLE_DEVICES=6 python transfer.py --content ./examples/content --style ./examples/style --content_segment ./examples/content_segment --style_segment ./examples/style_segment/ --output ./outputs/ --verbose --image_size 512 -a
     '''
-    run_bulk(config)
+    custom_bulk(config)
